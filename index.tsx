@@ -1,10 +1,5 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { GoogleGenAI, Type } from "@google/genai";
-
-// Initialization of Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
 
 interface OptionData {
   ticker: string;
@@ -38,7 +33,6 @@ const GEXAnalyzer: React.FC = () => {
   
   const chartRef = useRef<HTMLDivElement>(null);
 
-  // File parsing logic
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -53,14 +47,14 @@ const GEXAnalyzer: React.FC = () => {
         const data = (window as any).XLSX.utils.sheet_to_json(ws);
         
         const mappedData = data.map((row: any) => ({
-          ticker: row.ticker || row.symbol || row.ativo || '',
-          tipo: (row.tipo || row.type || '').toUpperCase() === 'CALL' ? 'CALL' : 'PUT',
+          ticker: row.ticker || row.symbol || row.ativo || 'ASSET',
+          tipo: String(row.tipo || row.type || '').toUpperCase().includes('CALL') ? 'CALL' : 'PUT',
           strike: parseFloat(row.strike || row.strike_price || 0),
           gamma: parseFloat(row.gamma || row.gamma_value || 0),
-          oi: parseFloat(row.oi || row.open_interest || row.volume || 0),
-        })).filter((o: OptionData) => o.strike > 0 && o.oi > 0);
+          oi: parseFloat(row.oi || row.open_interest || 0),
+        })).filter((o: any) => o.strike > 0 && o.oi > 0);
 
-        if (mappedData.length === 0) throw new Error("Nenhum dado válido de opções encontrado.");
+        if (mappedData.length === 0) throw new Error("Formato de planilha inválido ou sem dados.");
         
         setOptions(mappedData);
         setError(null);
@@ -71,96 +65,90 @@ const GEXAnalyzer: React.FC = () => {
     reader.readAsBinaryString(file);
   };
 
-  const runAnalysis = async () => {
+  const performQuantAnalysis = (processedOptions: OptionData[], spot: number): AnalysisResults => {
+    const totalGex = processedOptions.reduce((acc, curr) => acc + (curr.gex || 0), 0);
+    const regime = totalGex > 0 ? 'Bullish (Estabilidade)' : 'Bearish (Volatilidade)';
+
+    const sortedByAbsGex = [...processedOptions].sort((a, b) => Math.abs(b.gex || 0) - Math.abs(a.gex || 0));
+    const topStrikes = sortedByAbsGex.slice(0, 5);
+    const maxAbsGex = Math.abs(topStrikes[0]?.gex || 1);
+
+    const gammaWalls = topStrikes.map(o => ({
+      strike: o.strike,
+      strength: Math.min(100, Math.round((Math.abs(o.gex || 0) / maxAbsGex) * 100)),
+      type: o.strike > spot ? 'Resistance' : 'Support' as 'Resistance' | 'Support'
+    }));
+
+    const optionsNearSpot = processedOptions.filter(o => Math.abs(o.strike - spot) / spot < 0.02);
+    const maxOI = Math.max(...processedOptions.map(o => o.oi), 1);
+    const nearSpotMaxOI = Math.max(...optionsNearSpot.map(o => o.oi), 0);
+    
+    let pinRisk: 'Baixo' | 'Médio' | 'Alto' = 'Baixo';
+    if (nearSpotMaxOI > maxOI * 0.7) pinRisk = 'Alto';
+    else if (nearSpotMaxOI > maxOI * 0.3) pinRisk = 'Médio';
+
+    const signals: AnalysisResults['signals'] = [];
+    if (totalGex > 0) {
+      signals.push({
+        direction: 'LONG',
+        reason: 'Ambiente de Gamma Positivo favorece compressão de volatilidade e suporte.',
+        confidence: 0.75
+      });
+    } else {
+      signals.push({
+        direction: 'SHORT',
+        reason: 'Gamma Negativo indica aceleração de movimentos direcionais (Short Squeeze/Flash Crash).',
+        confidence: 0.8
+      });
+    }
+
+    const nearestWall = gammaWalls[0];
+    if (nearestWall && Math.abs(nearestWall.strike - spot) / spot < 0.01) {
+      signals.push({
+        direction: 'NEUTRAL',
+        reason: `Preço em zona de colisão com Wall de ${nearestWall.type} em $${nearestWall.strike}.`,
+        confidence: 0.9
+      });
+    }
+
+    return {
+      totalGex,
+      regime,
+      pinRisk,
+      gammaWalls,
+      marketContext: `Análise de ${processedOptions.length} strikes concluída. GEX líquido: ${totalGex.toLocaleString()}.`,
+      signals
+    };
+  };
+
+  const runAnalysis = () => {
     if (!currentPrice || options.length === 0) {
-      setError("Insira o preço atual e carregue as opções.");
+      setError("Preencha o preço spot e carregue a planilha de opções.");
       return;
     }
 
     setIsAnalyzing(true);
-    setError(null);
+    setTimeout(() => {
+      try {
+        const spot = parseFloat(currentPrice.toString());
+        const processedOptions = options.map(o => ({
+          ...o,
+          gex: o.tipo === 'CALL' ? (o.gamma * o.oi * 100 * spot) : (-o.gamma * o.oi * 100 * spot)
+        }));
 
-    try {
-      // Step 1: Manual Calculation for basic GEX
-      const spot = parseFloat(currentPrice.toString());
-      const processedOptions = options.map(o => ({
-        ...o,
-        gex: o.tipo === 'CALL' ? (o.gamma * o.oi * 100 * spot) : (-o.gamma * o.oi * 100 * spot)
-      }));
-
-      const totalGex = processedOptions.reduce((acc, curr) => acc + (curr.gex || 0), 0);
-
-      // Step 2: Gemini Analysis for Market Intelligence
-      const prompt = `Analise os seguintes dados de Gamma Exposure (GEX) para o ativo com preço atual ${spot} e vencimento em ${expiryDate}.
-      Dados: ${JSON.stringify(processedOptions.slice(0, 50))} (mostrando top 50 strikes).
-      Total GEX: ${totalGex}.
-      
-      Forneça uma análise profissional em JSON incluindo:
-      - regime: 'Bullish', 'Bearish' ou 'Ranging'
-      - pinRisk: 'Baixo', 'Médio' ou 'Alto'
-      - marketContext: Um resumo de 2 frases sobre a situação técnica
-      - signals: Um array de sinais com direction (LONG/SHORT/NEUTRAL), reason e confidence (0-1)
-      - gammaWalls: Array de strikes com strength (0-100) e type (Resistance/Support)`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              regime: { type: Type.STRING },
-              pinRisk: { type: Type.STRING },
-              marketContext: { type: Type.STRING },
-              signals: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    direction: { type: Type.STRING },
-                    reason: { type: Type.STRING },
-                    confidence: { type: Type.NUMBER }
-                  }
-                }
-              },
-              gammaWalls: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    strike: { type: Type.NUMBER },
-                    strength: { type: Type.NUMBER },
-                    type: { type: Type.STRING }
-                  }
-                }
-              }
-            }
-          }
-        }
-      });
-
-      const aiData = JSON.parse(response.text || "{}");
-      
-      setResults({
-        totalGex,
-        regime: aiData.regime || (totalGex > 0 ? 'Bullish' : 'Bearish'),
-        pinRisk: aiData.pinRisk || 'Baixo',
-        gammaWalls: aiData.gammaWalls || [],
-        marketContext: aiData.marketContext || "Análise concluída com base nos dados de exposição líquida.",
-        signals: aiData.signals || []
-      });
-
-      setOptions(processedOptions);
-    } catch (err: any) {
-      setError("Falha na análise inteligente: " + err.message);
-    } finally {
-      setIsAnalyzing(false);
-    }
+        setResults(performQuantAnalysis(processedOptions, spot));
+        setOptions(processedOptions);
+        setError(null);
+      } catch (err: any) {
+        setError("Erro no cálculo: " + err.message);
+      } finally {
+        setIsAnalyzing(false);
+      }
+    }, 500);
   };
 
   useEffect(() => {
-    if (results && chartRef.current) {
+    if (results && chartRef.current && (window as any).Plotly) {
       const calls = options.filter(o => o.tipo === 'CALL');
       const puts = options.filter(o => o.tipo === 'PUT');
 
@@ -181,38 +169,22 @@ const GEXAnalyzer: React.FC = () => {
       };
 
       const layout = {
-        title: { text: 'Exposição Gamma por Strike', font: { color: '#f8fafc' } },
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        xaxis: { gridcolor: '#1e293b', tickfont: { color: '#94a3b8' } },
-        yaxis: { gridcolor: '#1e293b', tickfont: { color: '#94a3b8' } },
+        xaxis: { gridcolor: '#1e293b', tickfont: { color: '#94a3b8' }, title: 'Strike Price' },
+        yaxis: { gridcolor: '#1e293b', tickfont: { color: '#94a3b8' }, title: 'Gamma Exposure' },
         legend: { font: { color: '#f8fafc' } },
-        margin: { t: 40, b: 40, l: 60, r: 20 },
+        margin: { t: 20, b: 40, l: 60, r: 20 },
         height: 350
       };
 
-      (window as any).Plotly.newPlot(chartRef.current, [trace1, trace2], layout, { responsive: true });
+      (window as any).Plotly.newPlot(chartRef.current, [trace1, trace2], layout, { responsive: true, displayModeBar: false });
     }
-  }, [results, options]);
-
-  const loadExample = () => {
-    setCurrentPrice(100.0);
-    const mockOptions: OptionData[] = [
-      { ticker: 'SPY', tipo: 'CALL', strike: 95, gamma: 0.05, oi: 1000 },
-      { ticker: 'SPY', tipo: 'CALL', strike: 100, gamma: 0.25, oi: 5000 },
-      { ticker: 'SPY', tipo: 'CALL', strike: 105, gamma: 0.15, oi: 3000 },
-      { ticker: 'SPY', tipo: 'PUT', strike: 95, gamma: 0.10, oi: 2000 },
-      { ticker: 'SPY', tipo: 'PUT', strike: 100, gamma: 0.20, oi: 4500 },
-      { ticker: 'SPY', tipo: 'PUT', strike: 90, gamma: 0.02, oi: 1000 },
-    ];
-    setOptions(mockOptions);
-    setError(null);
-  };
+  }, [results]);
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-950/80 sticky top-0 z-50 backdrop-blur-md">
+    <div className="min-h-screen bg-[#020617] text-slate-200">
+      <header className="border-b border-slate-800 bg-slate-950/50 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
@@ -220,224 +192,156 @@ const GEXAnalyzer: React.FC = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight">GEX ANALYZER <span className="text-indigo-500">PRO</span></h1>
-              <p className="text-[10px] mono text-slate-500 uppercase tracking-widest">Advanced Quantitative Terminal</p>
+              <p className="text-[10px] mono text-slate-500 uppercase tracking-widest">Client-Side Quant Terminal</p>
             </div>
           </div>
-          <div className="hidden md:flex items-center space-x-6 text-sm font-medium text-slate-400">
-            <button className="hover:text-white transition-colors">Dashboard</button>
-            <button className="hover:text-white transition-colors">Opções</button>
-            <button className="hover:text-white transition-colors">Configurações</button>
+          <div className="hidden md:flex items-center space-x-4">
+             <span className="text-xs text-slate-500 mono bg-slate-900 px-3 py-1 rounded-full border border-slate-800">SYSTEM: ONLINE</span>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Sidebar / Inputs */}
+      <main className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <aside className="lg:col-span-4 space-y-6">
-          <div className="glass-card rounded-2xl p-6 space-y-5">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" /></svg>
-              Entrada de Dados
+          <div className="glass-card rounded-2xl p-6 space-y-5 border-indigo-500/20">
+            <h2 className="text-sm font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>
+              Input de Dados
             </h2>
             
             <div className="space-y-4">
               <div>
-                <label className="text-xs font-semibold text-slate-500 uppercase mb-2 block">Preço Atual Spot</label>
+                <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Preço Atual Spot</label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
                   <input 
                     type="number" 
                     value={currentPrice}
                     onChange={(e) => setCurrentPrice(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 pl-8 pr-4 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 pl-8 pr-4 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-sm"
                     placeholder="0.00"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-500 uppercase mb-2 block">Data de Vencimento</label>
+                <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Data Vencimento</label>
                 <input 
                   type="date" 
                   value={expiryDate}
                   onChange={(e) => setExpiryDate(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-sm"
                 />
               </div>
 
               <div className="pt-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase mb-2 block">Dados de Opções</label>
+                <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Importar Opções</label>
                 <div 
-                  className="border-2 border-dashed border-slate-700 rounded-2xl p-8 text-center hover:border-indigo-500/50 hover:bg-slate-900/50 transition-all cursor-pointer relative"
+                  className="border border-dashed border-slate-700 rounded-xl p-6 text-center hover:border-indigo-500/50 hover:bg-slate-900/50 transition-all cursor-pointer relative"
                   onClick={() => document.getElementById('file-upload')?.click()}
                 >
-                  <input 
-                    type="file" 
-                    id="file-upload" 
-                    className="hidden" 
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleFileUpload}
-                  />
-                  <svg className="w-8 h-8 text-slate-500 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                  <p className="text-sm font-medium">{options.length > 0 ? `${options.length} strikes carregados` : "Clique para carregar Excel"}</p>
-                  <p className="text-xs text-slate-600 mt-1">Colunas: ticker, tipo, strike, gamma, OI</p>
+                  <input type="file" id="file-upload" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} />
+                  <p className="text-xs font-medium text-slate-400">{options.length > 0 ? `${options.length} strikes carregados` : "Clique para carregar Excel"}</p>
                 </div>
               </div>
 
               {error && (
-                <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-3 rounded-xl text-xs flex items-center gap-2">
-                  <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
+                <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-3 rounded-xl text-[10px] flex items-center gap-2">
+                  <svg className="w-3 h-3 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
                   {error}
                 </div>
               )}
 
-              <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={runAnalysis}
-                  disabled={isAnalyzing}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 py-3 rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 active:scale-95 flex items-center justify-center gap-2"
-                >
-                  {isAnalyzing ? (
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  ) : (
-                    <>
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-                      ANALISAR GEX
-                    </>
-                  )}
-                </button>
-                <button 
-                  onClick={loadExample}
-                  className="p-3 bg-slate-800 hover:bg-slate-700 rounded-xl transition-all"
-                  title="Carregar Dados de Exemplo"
-                >
-                  <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                </button>
-              </div>
+              <button 
+                onClick={runAnalysis}
+                disabled={isAnalyzing}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 py-3 rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 active:scale-[0.98] text-sm flex items-center justify-center gap-2"
+              >
+                {isAnalyzing ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : "EXECUTAR ANALISE QUANT"}
+              </button>
             </div>
           </div>
         </aside>
 
-        {/* Main Dashboard Area */}
         <section className="lg:col-span-8 space-y-6">
           {!results ? (
-            <div className="h-[600px] glass-card rounded-2xl flex flex-col items-center justify-center text-center p-12 space-y-6">
-              <div className="w-24 h-24 bg-slate-900 rounded-full flex items-center justify-center border border-slate-800">
-                <svg className="w-10 h-10 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+            <div className="h-[500px] glass-card rounded-2xl flex flex-col items-center justify-center text-center p-12 border-slate-800">
+               <div className="w-16 h-16 bg-slate-900 rounded-full flex items-center justify-center border border-slate-800 mb-6 text-slate-700">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
               </div>
-              <div>
-                <h3 className="text-2xl font-bold mb-2">Aguardando Dados</h3>
-                <p className="text-slate-500 max-w-sm">Carregue suas opções e defina o preço do ativo para visualizar a análise detalhada de Gamma Exposure.</p>
-              </div>
+              <h3 className="text-xl font-bold mb-2">Terminal em Espera</h3>
+              <p className="text-slate-500 text-sm max-w-xs">Aguardando dados de mercado para iniciar motor de processamento local.</p>
             </div>
           ) : (
-            <>
-              {/* Summary Widgets */}
+            <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="glass-card p-5 rounded-2xl border-l-4 border-l-indigo-500">
-                  <p className="text-xs font-semibold text-slate-500 uppercase mb-1">Total Net GEX</p>
-                  <p className={`text-2xl font-bold mono ${results.totalGex > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Net Exposure (GEX)</p>
+                  <p className={`text-xl font-bold mono ${results.totalGex > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                     {results.totalGex.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </p>
                 </div>
                 <div className="glass-card p-5 rounded-2xl border-l-4 border-l-amber-500">
-                  <p className="text-xs font-semibold text-slate-500 uppercase mb-1">Market Regime</p>
-                  <p className="text-2xl font-bold text-amber-400">{results.regime}</p>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Regime de Mercado</p>
+                  <p className="text-sm font-bold text-amber-400">{results.regime}</p>
                 </div>
                 <div className="glass-card p-5 rounded-2xl border-l-4 border-l-purple-500">
-                  <p className="text-xs font-semibold text-slate-500 uppercase mb-1">Pin Risk</p>
-                  <p className="text-2xl font-bold text-purple-400">{results.pinRisk}</p>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Pinning Risk</p>
+                  <p className="text-xl font-bold text-purple-400">{results.pinRisk}</p>
                 </div>
               </div>
 
-              {/* Chart Card */}
               <div className="glass-card rounded-2xl p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="font-bold">Distribuição de Exposição</h3>
-                  <div className="flex gap-2">
-                    <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 px-2 py-1 bg-emerald-400/10 rounded-full">CALLS</span>
-                    <span className="flex items-center gap-1.5 text-[10px] font-bold text-rose-400 px-2 py-1 bg-rose-400/10 rounded-full">PUTS</span>
-                  </div>
-                </div>
+                <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                   <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" /></svg>
+                   Distribuição Gamma por Strike
+                </h3>
                 <div ref={chartRef} className="w-full"></div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Gamma Walls */}
                 <div className="glass-card rounded-2xl p-6">
-                  <h3 className="font-bold mb-4 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-                    Gamma Walls
-                  </h3>
+                  <h3 className="text-sm font-bold mb-4 text-slate-400">Gamma Walls (Liquidez)</h3>
                   <div className="space-y-3">
-                    {results.gammaWalls.length > 0 ? results.gammaWalls.map((wall, i) => (
+                    {results.gammaWalls.map((wall, i) => (
                       <div key={i} className="flex items-center justify-between p-3 bg-slate-900/50 rounded-xl border border-slate-800">
                         <div>
-                          <p className="text-xs font-bold text-slate-500 uppercase">{wall.type}</p>
-                          <p className="text-lg font-bold mono">${wall.strike.toFixed(2)}</p>
+                          <p className="text-[9px] font-bold text-slate-500 uppercase">{wall.type}</p>
+                          <p className="text-md font-bold mono">${wall.strike.toFixed(2)}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-xs font-bold text-slate-500 uppercase">Power</p>
-                          <div className="w-24 h-2 bg-slate-800 rounded-full mt-1 overflow-hidden">
+                          <p className="text-[9px] font-bold text-slate-500 uppercase">Power</p>
+                          <div className="w-16 h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
                             <div className={`h-full ${wall.type === 'Resistance' ? 'bg-indigo-500' : 'bg-emerald-500'}`} style={{ width: `${wall.strength}%` }}></div>
                           </div>
                         </div>
                       </div>
-                    )) : (
-                      <p className="text-sm text-slate-500 italic">Nenhuma parede detectada nos strikes carregados.</p>
-                    )}
+                    ))}
                   </div>
                 </div>
 
-                {/* Trading Signals */}
                 <div className="glass-card rounded-2xl p-6">
-                  <h3 className="font-bold mb-4 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                    Sinais do Modelo
-                  </h3>
+                  <h3 className="text-sm font-bold mb-4 text-slate-400">Sinais Quantitativos</h3>
                   <div className="space-y-4">
-                    {results.signals.length > 0 ? results.signals.map((signal, i) => (
-                      <div key={i} className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className={`text-[10px] font-bold px-2 py-1 rounded-md ${
-                            signal.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 
-                            signal.direction === 'SHORT' ? 'bg-rose-500/20 text-rose-400' : 
-                            'bg-slate-500/20 text-slate-400'
-                          }`}>
-                            {signal.direction}
-                          </span>
-                          <span className="text-[10px] font-bold text-slate-500">CONFIDÊNCIA: {(signal.confidence * 100).toFixed(0)}%</span>
+                    {results.signals.map((signal, i) => (
+                      <div key={i} className="pb-3 border-b border-slate-800 last:border-0 last:pb-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${signal.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : signal.direction === 'SHORT' ? 'bg-rose-500/20 text-rose-400' : 'bg-slate-500/20 text-slate-400'}`}>{signal.direction}</span>
+                          <span className="text-[9px] font-bold text-slate-600">CONFIDENCE: {Math.round(signal.confidence * 100)}%</span>
                         </div>
-                        <p className="text-sm leading-relaxed text-slate-300">{signal.reason}</p>
+                        <p className="text-[11px] text-slate-400 leading-tight">{signal.reason}</p>
                       </div>
-                    )) : (
-                      <p className="text-sm text-slate-500 italic">Aguardando processamento do modelo.</p>
-                    )}
+                    ))}
                   </div>
                 </div>
               </div>
-
-              {/* Market Context AI Card */}
-              <div className="glass-card rounded-2xl p-6 border-t-4 border-t-indigo-500 bg-indigo-500/5">
-                <h3 className="font-bold mb-2 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-indigo-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
-                  Contexto de Mercado (Gemini AI)
-                </h3>
-                <p className="text-sm text-slate-300 italic">"{results.marketContext}"</p>
-              </div>
-            </>
+            </div>
           )}
         </section>
       </main>
 
-      {/* Background decoration */}
-      <div className="fixed top-0 left-0 w-full h-full pointer-events-none -z-10 overflow-hidden">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/10 rounded-full blur-[120px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/10 rounded-full blur-[120px]" />
-      </div>
-
-      <footer className="border-t border-slate-800 py-8 px-6 text-center text-slate-600 text-xs">
-        <p>© 2024 GEX ANALYZER TERMINAL. Todos os dados são processados localmente. Powered by Gemini Pro.</p>
+      <footer className="border-t border-slate-800 py-6 text-center">
+         <p className="text-[10px] mono text-slate-600 uppercase tracking-widest">© 2024 GEX ANALYZER PRO 2.0 | NO-SERVER ARCHITECTURE</p>
       </footer>
     </div>
   );

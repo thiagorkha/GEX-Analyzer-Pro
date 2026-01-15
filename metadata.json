@@ -1,5 +1,5 @@
 {
   "name": "GEX Analyzer Pro 2.0",
-  "description": "Professional Gamma Exposure & Market Regime analysis platform powered by Gemini AI.",
+  "description": "Terminal quantitativo determinístico para análise de Gamma Exposure em tempo real (100% Client-Side).",
   "requestFramePermissions": []
 }
