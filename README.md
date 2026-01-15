@@ -1,28 +1,32 @@
-
 # 📊 Gamma Terminal Pro v2.5
 
-Ferramenta avançada para análise de **Gamma Exposure (GEX)** e previsão de volatilidade baseada no posicionamento de Market Makers.
+Terminal quantitativo de alta performance para análise de **Gamma Exposure (GEX)**. Esta ferramenta foi desenhada para traders profissionais que buscam entender o posicionamento dos Market Makers e prever zonas de aceleração ou compressão de volatilidade.
 
-## ⚙️ Como Funciona
-O terminal calcula a exposição teórica dos market makers em cada strike. 
-- **Fórmula:** `GEX = Gamma * Open Interest * 100 * SpotPrice`
-- **Call GEX:** Positivo (MM está comprado no papel para cada alta, suprimindo volatilidade).
-- **Put GEX:** Negativo (MM precisa vender conforme o preço cai, acelerando o movimento).
+## 🧠 Motor de Decisão
+O terminal não apenas visualiza dados, ele interpreta o regime de mercado:
 
-## 📄 Estrutura Necessária da Planilha (.xlsx ou .csv)
-O importador é inteligente, mas para melhores resultados utilize estas colunas:
-| Cabeçalho | Descrição |
-| :--- | :--- |
-| `strike` | O preço de exercício da opção. |
-| `type` | Deve conter 'CALL' ou 'PUT' (ou tipo). |
-| `gamma` | O Gamma da opção (0.00x). |
-| `oi` | Open Interest (Contratos em aberto). |
+### 1. Regime de Gamma Positivo
+*   **Comportamento MM**: Comprar ralis, vender quedas (Mean Reversion).
+*   **Impacto**: Volatilidade suprimida, mercado "colado" nos strikes.
+*   **Estratégia**: Venda de volatilidade (Theta Gang), Iron Condors, busca por reversão à média.
 
-## 🛠️ Solução de Problemas
-Se a aplicação travar em "Iniciando Kernel":
-1. Limpe o cache do navegador (`Ctrl + F5`).
-2. Verifique o console (`F12`). O erro `Unexpected token ','` foi corrigido nesta versão através da simplificação do `importmap` e uso do bundle nativo.
-3. Se o gráfico não aparecer, verifique se a coluna `strike` da sua planilha contém números válidos.
+### 2. Regime de Gamma Negativo
+*   **Comportamento MM**: Vender quedas, comprar ralis (Momentum).
+*   **Impacto**: Volatilidade expandida, movimentos rápidos e direcionais (Gapped moves).
+*   **Estratégia**: Compra de volatilidade (Long Gamma), Straddles, acompanhamento de tendência.
+
+## 🛠️ Parâmetros Operacionais
+*   **Call Wall**: O maior teto de gamma positivo. Atua como resistência magnética.
+*   **Put Wall**: O maior suporte de gamma negativo. Atua como suporte ou acelerador de queda se rompido.
+*   **Gamma Flip**: O strike onde a dinâmica de hedge muda completamente.
+*   **Gamma Pin**: O strike onde o mercado tem maior probabilidade de encerrar no vencimento devido ao Open Interest massivo.
+
+## 📄 Requisitos do Arquivo
+O importador suporta `.xlsx`, `.xls` e `.csv`. Certifique-se de que sua planilha contenha:
+*   `strike`: Preço de exercício.
+*   `type`: 'CALL' ou 'PUT'.
+*   `gamma`: Valor do gamma (ex: 0.0012).
+*   `oi`: Open Interest total do strike.
 
 ---
-*Aviso: Esta é uma ferramenta de suporte à decisão. Não constitui recomendação financeira.*
+*Aviso: O Gamma Terminal Pro é uma ferramenta analítica baseada em modelos matemáticos. Trading de opções envolve risco significativo.*
