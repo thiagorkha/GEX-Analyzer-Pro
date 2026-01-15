@@ -1,3 +1,3 @@
-# GEX Analyzer Pro 2.0
+# GEX Analyzer Pro
 
 em construção
