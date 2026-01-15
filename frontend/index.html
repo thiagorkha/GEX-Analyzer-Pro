@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GEX Analyzer - Análise de Exposição Gamma</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation -->
+        <nav class="navbar">
+            <div class="navbar-brand">
+                <h1>📊 GEX Analyzer</h1>
+                <p>Plataforma Profissional de Análise de Gamma Exposure</p>
+            </div>
+            <div class="nav-links">
+                <a href="#input">Input</a>
+                <a href="#dashboard">Dashboard</a>
+                <a href="#results">Resultados</a>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Input Section -->
+            <section id="input" class="section">
+                <div class="section-header">
+                    <h2>📥 Entrada de Dados</h2>
+                    <p>Insira o preço do ativo e faça upload dos dados das opções em Excel</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="current-price">💰 Preço Atual do Ativo</label>
+                    <input type="number" id="current-price" placeholder="Ex: 100.50" step="0.01" min="0">
+                </div>
+
+                <div class="form-group">
+                    <label for="expiration-date">📅 Data de Expiração</label>
+                    <input type="date" id="expiration-date">
+                </div>
+
+                <div class="form-group">
+                    <label>📋 Upload de Dados das Opções (Excel)</label>
+                    <div class="file-upload-area" id="file-upload-area">
+                        <strong>🎯 Clique ou arraste um arquivo Excel aqui</strong>
+                        <p>Colunas esperadas: <strong>ticker, tipo, strike, gamma, OI</strong></p>
+                        <p style="font-size: 0.85rem; margin-top: 1rem; color: #9ca3af;">
+                            Exemplo:<br/>
+                            ticker | tipo | strike | gamma | OI<br/>
+                            PETR4 | CALL | 20.00 | 0.05 | 1000
+                        </p>
+                    </div>
+                    <input type="file" id="file-input" accept=".xlsx,.xls,.csv">
+                    <p style="color: #10b981; font-size: 0.85rem; margin-top: 0.5rem;" id="file-status"></p>
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-primary" id="analyze-btn">🚀 Analisar GEX</button>
+                    <button class="btn btn-secondary" id="load-example-btn">📊 Carregar Exemplo</button>
+                    <button class="btn btn-secondary" id="debug-btn" style="background: #f59e0b; color: white; border: none;">🐛 Debug Console</button>
+                </div>
+            </section>
+
+            <!-- Dashboard Section -->
+            <section id="dashboard" class="section hidden">
+                <div class="section-header">
+                    <h2>📈 Dashboard de Análise</h2>
+                    <p>Resumo dos resultados da análise</p>
+                </div>
+
+                <div class="dashboard-grid">
+                    <!-- Price Card -->
+                    <div class="card">
+                        <div class="card-header">💹 Preço Atual</div>
+                        <div class="card-body">
+                            <div class="price-display">
+                                <span id="display-price" class="price">0.00</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- GEX Card -->
+                    <div class="card">
+                        <div class="card-header">🎯 GEX Total</div>
+                        <div class="card-body">
+                            <span id="total-gex" class="value">0</span>
+                            <span id="gex-regime" class="label">Neutral</span>
+                        </div>
+                    </div>
+
+                    <!-- Walls Card -->
+                    <div class="card">
+                        <div class="card-header">🧱 Gamma Walls</div>
+                        <div class="card-body">
+                            <span id="walls-count" class="value">0</span>
+                            <span class="label">Detectadas</span>
+                        </div>
+                    </div>
+
+                    <!-- Pin Risk Card -->
+                    <div class="card">
+                        <div class="card-header">📌 Pin Risk</div>
+                        <div class="card-body">
+                            <span id="pin-risk" class="value badge badge-warning">BAIXO</span>
+                            <span class="label">Nível de Risco</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section id="results" class="section hidden">
+                <div class="section-header">
+                    <h2>📊 Resultados da Análise</h2>
+                    <p>Padrões, regime e sinais de trading</p>
+                </div>
+
+                <!-- Results Table -->
+                <div style="overflow-x: auto;">
+                    <table id="results-table">
+                        <thead>
+                            <tr>
+                                <th>Strike</th>
+                                <th>Tipo</th>
+                                <th>Gamma</th>
+                                <th>OI</th>
+                                <th>GEX</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-tbody">
+                            <tr><td colspan="6" class="text-center">Nenhum dado</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Charts Section -->
+                <div style="margin-top: 2rem;">
+                    <h3 style="margin-bottom: 1rem;">📈 Visualizações</h3>
+                    <div class="charts-grid">
+                        <div class="chart-container">
+                            <canvas id="gex-chart"></canvas>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="gamma-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Patterns Section -->
+                <div style="margin-top: 2rem;">
+                    <h3 style="margin-bottom: 1rem;">🎯 Padrões Detectados</h3>
+                    <div id="patterns-container" class="dashboard-grid">
+                        <p>Nenhum padrão detectado</p>
+                    </div>
+                </div>
+
+                <!-- Signals Section -->
+                <div style="margin-top: 2rem;">
+                    <h3 style="margin-bottom: 1rem;">🚀 Sinais de Trading</h3>
+                    <div id="signals-container" class="dashboard-grid">
+                        <p>Nenhum sinal gerado</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Messages -->
+            <div id="error-message" class="alert alert-danger hidden"></div>
+            <div id="success-message" class="alert alert-success hidden"></div>
+            <div id="info-message" class="alert alert-info hidden"></div>
+
+            <!-- Loading Spinner -->
+            <div id="loading" class="hidden text-center" style="padding: 2rem;">
+                <div class="spinner"></div>
+                <p style="margin-top: 1rem; color: var(--text-light);">Analisando dados...</p>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer style="background: var(--light); color: var(--text-light); text-align: center; padding: 2rem; border-top: 1px solid var(--border); margin-top: auto;">
+            <p>&copy; 2024 GEX Analyzer. Análise profissional de Gamma Exposure.</p>
+        </footer>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js@2.26.0/dist/plotly.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js"></script>
+    <script src="js/excel-parser.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
