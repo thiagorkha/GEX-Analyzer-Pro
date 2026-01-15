@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GEX Analyzer Pro</title>
+    <title>GEX Analyzer Pro 2.5</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
     
     <script src="https://cdn.tailwindcss.com"></script>
@@ -29,6 +29,7 @@
             color: #f8fafc;
             margin: 0;
             font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
         }
         #root { min-height: 100vh; }
         .glass {
@@ -36,12 +37,28 @@
             backdrop-filter: blur(10px);
             border: 1px solid rgba(51, 65, 85, 0.5);
         }
+        .loading-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: #020617;
+        }
+        .loader-text {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.3em;
+            color: #6366f1;
+        }
     </style>
 </head>
 <body>
     <div id="root">
-        <div class="flex items-center justify-center min-h-screen">
-            <p class="text-slate-500 animate-pulse font-mono text-xs uppercase tracking-widest">Iniciando Terminal Quant...</p>
+        <div class="loading-screen">
+            <div class="loader-text animate-pulse">Iniciando Terminal GEX...</div>
+            <div class="mt-4 text-[8px] text-slate-700 mono">Verificando dependências quantitativas</div>
         </div>
     </div>
 </body>
