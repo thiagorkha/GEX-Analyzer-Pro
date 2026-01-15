@@ -1,65 +1,77 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GEX Analyzer Pro 2.5</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+    <title>Gamma Terminal Pro | GEX Analyzer</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='85'>📉</text></svg>">
     
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Bibliotecas de Pesos Pesados via CDN (Estáveis) -->
     <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    
-    <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@19.0.0",
-    "react-dom": "https://esm.sh/react-dom@19.0.0",
-    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/"
-  }
-}
-</script>
 
     <style>
+        :root { --bg: #020617; }
         body {
-            background-color: #020617;
+            background-color: var(--bg);
             color: #f8fafc;
             margin: 0;
             font-family: 'Inter', sans-serif;
             overflow-x: hidden;
         }
-        #root { min-height: 100vh; }
-        .glass {
-            background: rgba(15, 23, 42, 0.6);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(51, 65, 85, 0.5);
-        }
-        .loading-screen {
+        .loading-container {
+            position: fixed;
+            inset: 0;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
-            background: #020617;
+            background: var(--bg);
+            z-index: 9999;
+            transition: opacity 0.5s ease-out;
         }
-        .loader-text {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.3em;
-            color: #6366f1;
+        .scanline {
+            width: 200px;
+            height: 2px;
+            background: #6366f1;
+            box-shadow: 0 0 15px #6366f1;
+            animation: scan 2s linear infinite;
         }
+        @keyframes scan {
+            0% { transform: translateY(-20px); opacity: 0; }
+            50% { opacity: 1; }
+            100% { transform: translateY(20px); opacity: 0; }
+        }
+        .mono { font-family: 'JetBrains Mono', monospace; }
     </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
+  }
+}
+</script>
 </head>
 <body>
     <div id="root">
-        <div class="loading-screen">
-            <div class="loader-text animate-pulse">Iniciando Terminal GEX...</div>
-            <div class="mt-4 text-[8px] text-slate-700 mono">Verificando dependências quantitativas</div>
+        <div class="loading-container" id="initial-loader">
+            <div class="scanline"></div>
+            <div class="mt-8 text-indigo-500 mono text-[10px] tracking-[0.4em] uppercase animate-pulse">
+                Iniciando Kernel Quantitativo
+            </div>
+            <div class="mt-2 text-slate-700 mono text-[8px] uppercase">
+                Aguardando handshaking de módulos...
+            </div>
         </div>
     </div>
+    <!-- O Vite injetará o script automaticamente ou o carregador do ambiente o fará -->
 </body>
 </html>

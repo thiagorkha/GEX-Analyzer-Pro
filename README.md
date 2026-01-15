@@ -1,30 +1,28 @@
-# 📊 GEX Analyzer Pro 2.5
 
-Terminal de alta precisão para análise de **Gamma Exposure (GEX)** diretamente no navegador. Esta ferramenta permite visualizar como a posição dos Market Makers influencia a volatilidade do mercado.
+# 📊 Gamma Terminal Pro v2.5
 
-### 🏗️ Status do Projeto
-**Versão 2.5 Estável** - Correções aplicadas no motor de renderização e importação de módulos.
+Ferramenta avançada para análise de **Gamma Exposure (GEX)** e previsão de volatilidade baseada no posicionamento de Market Makers.
 
----
+## ⚙️ Como Funciona
+O terminal calcula a exposição teórica dos market makers em cada strike. 
+- **Fórmula:** `GEX = Gamma * Open Interest * 100 * SpotPrice`
+- **Call GEX:** Positivo (MM está comprado no papel para cada alta, suprimindo volatilidade).
+- **Put GEX:** Negativo (MM precisa vender conforme o preço cai, acelerando o movimento).
 
-### ✅ Checklist de Funcionamento (Confira no seu Navegador)
-Se a página não carregar, verifique estes pontos:
-1. **Conexão**: O app utiliza CDNs (esm.sh, tailwind, plotly) e requer internet para o primeiro carregamento.
-2. **Navegador**: Utilize Chrome, Edge ou Brave atualizados.
-3. **Extensões**: Algumas extensões (Tradutores, AdBlockers) podem injetar scripts que causam `SyntaxError`. Se houver erro, tente em uma **Aba Anônima**.
-4. **Console**: Aperte `F12` e vá em "Console". Se vir erros em vermelho, verifique se são relativos a extensões do Chrome.
+## 📄 Estrutura Necessária da Planilha (.xlsx ou .csv)
+O importador é inteligente, mas para melhores resultados utilize estas colunas:
+| Cabeçalho | Descrição |
+| :--- | :--- |
+| `strike` | O preço de exercício da opção. |
+| `type` | Deve conter 'CALL' ou 'PUT' (ou tipo). |
+| `gamma` | O Gamma da opção (0.00x). |
+| `oi` | Open Interest (Contratos em aberto). |
 
----
-
-### 🚀 Como Utilizar
-1. **Preço Spot**: Insira o preço atual do ativo (ex: 5800.00).
-2. **Importação**: Clique na área de upload e carregue sua planilha.
-   - O arquivo deve ter os cabeçalhos: `strike`, `gamma`, `oi` (ou `open_interest`) e `tipo` (ou `type`).
-3. **Calcular**: O sistema processará milhares de dados em milissegundos localmente.
-
-### 📈 Interpretação dos Resultados
-- **GEX Positivo (Verde)**: Indica um mercado com "amortecimento". Os Market Makers tendem a comprar quedas e vender altas para reequilibrar o delta, reduzindo a volatilidade.
-- **GEX Negativo (Vermelho)**: Indica um mercado "instável". Os Market Makers precisam vender conforme o mercado cai e comprar conforme sobe para se protegerem, o que acelera os movimentos e explode a volatilidade.
+## 🛠️ Solução de Problemas
+Se a aplicação travar em "Iniciando Kernel":
+1. Limpe o cache do navegador (`Ctrl + F5`).
+2. Verifique o console (`F12`). O erro `Unexpected token ','` foi corrigido nesta versão através da simplificação do `importmap` e uso do bundle nativo.
+3. Se o gráfico não aparecer, verifique se a coluna `strike` da sua planilha contém números válidos.
 
 ---
-*Nota: Este software é uma ferramenta de visualização de dados e não constitui recomendação de investimento.*
+*Aviso: Esta é uma ferramenta de suporte à decisão. Não constitui recomendação financeira.*

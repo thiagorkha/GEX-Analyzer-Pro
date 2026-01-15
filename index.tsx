@@ -1,25 +1,37 @@
-import React, { useState, useEffect, useRef } from 'react';
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 
-// Interfaces de Dados
-interface OptionData {
-  ticker: string;
-  tipo: 'CALL' | 'PUT';
+// Tipagem para dados de opções
+interface OptionContract {
   strike: number;
+  type: 'CALL' | 'PUT';
   gamma: number;
-  oi: number;
-  gex?: number;
+  openInterest: number;
+  gex: number;
 }
 
 const GEXAnalyzer: React.FC = () => {
-  const [currentPrice, setCurrentPrice] = useState<string>('');
-  const [options, setOptions] = useState<OptionData[]>([]);
-  const [results, setResults] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [spotPrice, setSpotPrice] = useState<string>('');
+  const [contracts, setContracts] = useState<OptionContract[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
 
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Cálculos Agregados
+  const stats = useMemo(() => {
+    if (contracts.length === 0) return null;
+    const netGex = contracts.reduce((acc, curr) => acc + curr.gex, 0);
+    const callGex = contracts.filter(c => c.type === 'CALL').reduce((acc, curr) => acc + curr.gex, 0);
+    const putGex = contracts.filter(c => c.type === 'PUT').reduce((acc, curr) => acc + curr.gex, 0);
+    
+    // Encontrar o "Gamma Flip" (aproximado pelo strike com maior transição)
+    const sortedStrikes = [...contracts].sort((a, b) => a.strike - b.strike);
+    
+    return { netGex, callGex, putGex };
+  }, [contracts]);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -27,213 +39,261 @@ const GEXAnalyzer: React.FC = () => {
     reader.onload = (evt) => {
       try {
         const XLSX = (window as any).XLSX;
-        if (!XLSX) throw new Error("Dependência XLSX não encontrada.");
-        
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-        
-        const mapped = data.map((row: any) => ({
-          ticker: row.ticker || row.symbol || row.ativo || 'ASSET',
-          tipo: String(row.tipo || row.type || '').toUpperCase().includes('PUT') ? 'PUT' : 'CALL',
-          strike: parseFloat(row.strike || row.strike_price || 0),
-          gamma: parseFloat(row.gamma || 0),
-          oi: parseFloat(row.oi || row.open_interest || 0),
-        })).filter((o: any) => o.strike > 0 && !isNaN(o.gamma));
+        if (!XLSX) throw new Error("Biblioteca de processamento Excel não carregada.");
 
-        if (mapped.length === 0) throw new Error("Planilha inválida ou sem colunas compatíveis.");
+        const data = evt.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet);
+
+        const mapped: OptionContract[] = json.map((row: any) => {
+          const type = String(row.tipo || row.type || '').toUpperCase().includes('PUT') ? 'PUT' : 'CALL';
+          const strike = parseFloat(row.strike || row.strike_price || 0);
+          const gamma = parseFloat(row.gamma || 0);
+          const oi = parseFloat(row.oi || row.open_interest || 0);
+          
+          // GEX = Gamma * OI * 100 * Spot (Calculado dinamicamente depois se necessário)
+          // Mas aqui guardamos os valores base para recalcular ao mudar o Spot
+          return { strike, type, gamma, openInterest: oi, gex: 0 };
+        }).filter((c: any) => c.strike > 0 && !isNaN(c.gamma));
+
+        if (mapped.length === 0) throw new Error("A planilha não contém dados válidos de opções.");
         
-        setOptions(mapped);
+        setContracts(mapped);
         setError(null);
       } catch (err: any) {
-        setError(err.message || "Erro ao processar arquivo.");
+        setError(err.message || "Erro ao ler arquivo.");
       }
     };
     reader.readAsBinaryString(file);
   };
 
-  const calculateGEX = () => {
-    const spot = parseFloat(currentPrice);
-    if (isNaN(spot) || options.length === 0) {
-      setError("Insira um preço spot válido e carregue os dados.");
+  const calculateExposure = () => {
+    const spot = parseFloat(spotPrice);
+    if (isNaN(spot) || contracts.length === 0) {
+      setError("Defina um preço spot válido e importe a cadeia de opções.");
       return;
     }
 
     setLoading(true);
-    // Simulação de processamento para feedback visual
     setTimeout(() => {
-      try {
-        const processed = options.map(o => ({
-          ...o,
-          gex: o.tipo === 'CALL' 
-            ? (o.gamma * o.oi * 100 * spot) 
-            : (-o.gamma * o.oi * 100 * spot)
-        }));
-        
-        const total = processed.reduce((acc, curr) => acc + (curr.gex || 0), 0);
-        setResults({ total, processed });
-        setError(null);
-      } catch (err) {
-        setError("Falha no cálculo matemático.");
-      } finally {
-        setLoading(false);
-      }
-    }, 400);
+      const updated = contracts.map(c => {
+        // CALL GEX = Gamma * OI * 100 * Spot
+        // PUT GEX = -Gamma * OI * 100 * Spot (Market Maker short Put = Long Gamma, but GEX convention usually flips)
+        const multiplier = c.type === 'CALL' ? 1 : -1;
+        return {
+          ...c,
+          gex: multiplier * c.gamma * c.openInterest * 100 * spot
+        };
+      });
+      setContracts(updated);
+      setLoading(false);
+    }, 300);
   };
 
   useEffect(() => {
-    if (results && chartRef.current && (window as any).Plotly) {
-      const calls = results.processed.filter((o: any) => o.tipo === 'CALL');
-      const puts = results.processed.filter((o: any) => o.tipo === 'PUT');
+    if (contracts.length > 0 && stats && chartRef.current && (window as any).Plotly) {
+      const sorted = [...contracts].sort((a, b) => a.strike - b.strike);
       
-      const traces = [
-        {
-          x: calls.map((o: any) => o.strike),
-          y: calls.map((o: any) => o.gex),
-          name: 'CALL GEX', type: 'bar', marker: { color: '#10b981' }
-        },
-        {
-          x: puts.map((o: any) => o.strike),
-          y: puts.map((o: any) => o.gex),
-          name: 'PUT GEX', type: 'bar', marker: { color: '#ef4444' }
-        }
-      ];
+      const calls = sorted.filter(c => c.type === 'CALL');
+      const puts = sorted.filter(c => c.type === 'PUT');
 
-      (window as any).Plotly.newPlot(chartRef.current, traces, {
+      const traceCalls = {
+        x: calls.map(c => c.strike),
+        y: calls.map(c => c.gex),
+        name: 'Call GEX',
+        type: 'bar',
+        marker: { color: '#10b981', opacity: 0.7 }
+      };
+
+      const tracePuts = {
+        x: puts.map(c => c.strike),
+        y: puts.map(c => c.gex),
+        name: 'Put GEX',
+        type: 'bar',
+        marker: { color: '#ef4444', opacity: 0.7 }
+      };
+
+      const layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: '#94a3b8', size: 10, family: 'JetBrains Mono' },
-        margin: { t: 20, r: 20, b: 40, l: 60 },
+        font: { color: '#64748b', family: 'JetBrains Mono', size: 10 },
+        margin: { t: 10, r: 10, b: 40, l: 60 },
+        hovermode: 'x unified',
         showlegend: true,
-        legend: { x: 0, y: 1.2, orientation: 'h' },
-        xaxis: { gridcolor: '#1e293b', title: { text: 'STRIKE', font: { size: 9 } } },
-        yaxis: { gridcolor: '#1e293b', title: { text: 'EXPOSURE ($)', font: { size: 9 } } }
-      }, { responsive: true, displayModeBar: false });
+        legend: { orientation: 'h', x: 0, y: 1.1 },
+        xaxis: { gridcolor: '#1e293b', zerolinecolor: '#334155', title: 'Strike Price' },
+        yaxis: { gridcolor: '#1e293b', zerolinecolor: '#334155', title: 'Gamma Exposure ($)' }
+      };
+
+      (window as any).Plotly.newPlot(chartRef.current, [traceCalls, tracePuts], layout, { responsive: true, displayModeBar: false });
     }
-  }, [results]);
+  }, [contracts, stats]);
+
+  // Remove o loader inicial quando o React monta
+  useEffect(() => {
+    const loader = document.getElementById('initial-loader');
+    if (loader) {
+      loader.style.opacity = '0';
+      setTimeout(() => loader.remove(), 500);
+    }
+  }, []);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 p-4 md:p-10 font-sans selection:bg-indigo-500/30">
-      <div className="max-w-7xl mx-auto space-y-10">
+    <div className="min-h-screen bg-[#020617] text-slate-300 selection:bg-indigo-500/30">
+      <div className="max-w-[1600px] mx-auto p-4 md:p-8">
         
-        {/* Header */}
-        <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-800 pb-8">
+        {/* Nav / Header */}
+        <header className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 pb-6 border-b border-slate-800/50">
           <div>
-            <div className="flex items-center gap-3 mb-1">
-              <span className="bg-indigo-600 text-white text-[10px] font-black px-2 py-0.5 rounded italic">PRO</span>
-              <h1 className="text-3xl font-black tracking-tighter uppercase">Gamma <span className="text-indigo-500">Terminal</span></h1>
-            </div>
-            <p className="text-[10px] font-mono text-slate-500 uppercase tracking-[0.3em]">Quantitative Market Exposure Engine v2.5</p>
+            <h1 className="text-2xl font-extrabold tracking-tighter text-white flex items-center gap-2 uppercase italic">
+              <span className="bg-indigo-600 text-[10px] px-2 py-1 rounded-md not-italic">QUANT</span>
+              Gamma <span className="text-indigo-500">Terminal</span>
+            </h1>
+            <p className="text-[10px] mono text-slate-500 mt-1 uppercase tracking-widest font-bold">Market Maker Exposure Analysis Engine</p>
           </div>
-          <div className="flex items-center gap-4 text-right">
-            <div className="hidden sm:block">
-              <p className="text-[9px] font-bold text-slate-600 uppercase">Status do Sistema</p>
-              <p className="text-xs font-mono text-emerald-500 font-bold tracking-tight">ONLINE / SEM LATÊNCIA</p>
-            </div>
+          <div className="flex gap-4 mt-4 md:mt-0">
+             <div className="text-right">
+                <p className="text-[9px] text-slate-600 uppercase font-black">System Load</p>
+                <div className="flex gap-1 mt-1">
+                   <div className="w-1 h-3 bg-indigo-500"></div>
+                   <div className="w-1 h-3 bg-indigo-500"></div>
+                   <div className="w-1 h-3 bg-indigo-800"></div>
+                </div>
+             </div>
           </div>
         </header>
 
-        {/* Painel Principal */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           
-          {/* Sidebar de Entrada */}
-          <aside className="lg:col-span-1 space-y-6">
-            <div className="glass p-6 rounded-3xl shadow-2xl">
-              <h3 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-6">Configurações de Fluxo</h3>
+          {/* Sidebar de Controle */}
+          <aside className="lg:col-span-3 space-y-6">
+            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 backdrop-blur-xl">
+              <h2 className="text-[11px] font-black text-indigo-400 uppercase tracking-[0.2em] mb-6">Parâmetros do Motor</h2>
               
-              <div className="space-y-5">
+              <div className="space-y-6">
                 <div>
-                  <label className="text-[9px] font-bold text-slate-500 uppercase mb-2 block">Preço Spot (Atual)</label>
-                  <input 
-                    type="number" 
-                    value={currentPrice}
-                    onChange={e => setCurrentPrice(e.target.value)}
-                    placeholder="Ex: 5840.50"
-                    className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none transition-all placeholder:text-slate-700"
-                  />
+                  <label className="text-[10px] text-slate-500 uppercase font-bold mb-2 block">Preço Spot do Ativo</label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 text-xs">$</span>
+                    <input 
+                      type="number"
+                      value={spotPrice}
+                      onChange={e => setSpotPrice(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full bg-black/40 border border-slate-700 rounded-xl py-3 pl-8 pr-4 text-sm focus:border-indigo-500 outline-none transition-all placeholder:text-slate-800 mono"
+                    />
+                  </div>
                 </div>
 
                 <div>
-                  <label className="text-[9px] font-bold text-slate-500 uppercase mb-2 block">Dados de Opções (XLSX/CSV)</label>
-                  <label className="group flex flex-col items-center justify-center border-2 border-dashed border-slate-800 rounded-2xl p-6 cursor-pointer hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all">
-                    <svg className="w-6 h-6 text-slate-700 group-hover:text-indigo-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-                    <span className="text-[10px] font-bold text-slate-600 group-hover:text-slate-400 text-center uppercase">
-                      {options.length > 0 ? `${options.length} Strikes Carregados` : 'Clique para Importar'}
+                  <label className="text-[10px] text-slate-500 uppercase font-bold mb-2 block">Dados de Opções (XLSX)</label>
+                  <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-800 rounded-xl p-8 cursor-pointer hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all group">
+                    <svg className="w-6 h-6 text-slate-700 group-hover:text-indigo-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <span className="text-[10px] font-bold text-slate-600 uppercase text-center">
+                      {contracts.length > 0 ? `${contracts.length} Linhas` : 'Clique para Importar'}
                     </span>
-                    <input type="file" onChange={handleFile} className="hidden" accept=".xlsx,.xls,.csv" />
+                    <input type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} />
                   </label>
                 </div>
 
                 {error && (
-                  <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl text-[10px] font-mono text-red-400">
+                  <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-[10px] text-rose-400 mono">
                     ERR: {error}
                   </div>
                 )}
 
                 <button 
-                  onClick={calculateGEX}
-                  disabled={loading || !currentPrice || options.length === 0}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 py-4 rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-xl shadow-indigo-500/10"
+                  onClick={calculateExposure}
+                  disabled={loading || !spotPrice || contracts.length === 0}
+                  className="w-full py-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white font-black text-[11px] uppercase tracking-widest transition-all shadow-xl shadow-indigo-600/10"
                 >
-                  {loading ? 'Processando...' : 'Calcular Exposição'}
+                  {loading ? 'Sincronizando...' : 'Executar Análise GEX'}
                 </button>
               </div>
             </div>
-            
-            <div className="p-4 rounded-2xl bg-slate-900/30 border border-slate-800/50">
-               <p className="text-[8px] text-slate-600 leading-relaxed font-mono">
-                 GEX > 0: Market Makers (MM) reduzem volatilidade (compra nos dips).<br/><br/>
-                 GEX < 0: MM aceleram volatilidade (venda nos dips).
-               </p>
+
+            <div className="p-6 rounded-2xl bg-slate-900/20 border border-slate-800/50">
+               <h3 className="text-[9px] font-bold text-slate-500 uppercase mb-3">Guia de Interpretação</h3>
+               <div className="space-y-3 text-[10px] leading-relaxed text-slate-400">
+                  <p><b className="text-emerald-500">GAMMA POSITIVO:</b> MM compram quedas. Volatilidade suprimida.</p>
+                  <p><b className="text-rose-500">GAMMA NEGATIVO:</b> MM vendem quedas. Volatilidade acelerada.</p>
+               </div>
             </div>
           </aside>
 
-          {/* Área de Gráficos e Resultados */}
-          <main className="lg:col-span-3 space-y-6">
-            {!results ? (
-              <div className="glass h-[500px] rounded-[40px] flex flex-col items-center justify-center text-slate-700 border-dashed">
-                <div className="w-16 h-16 bg-slate-900/50 rounded-full flex items-center justify-center mb-4">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                </div>
-                <p className="text-xs font-bold uppercase tracking-widest">Aguardando Execução do Motor</p>
+          {/* Painel Principal de Dados */}
+          <main className="lg:col-span-9 space-y-6">
+            
+            {/* Widgets de Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-slate-900/40 border border-slate-800 p-6 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Net Exposure</p>
+                <h3 className={`text-3xl font-black mono tracking-tighter ${stats?.netGex && stats.netGex >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                  {stats ? `$${(stats.netGex / 1000000).toFixed(2)}M` : '---'}
+                </h3>
               </div>
-            ) : (
-              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                {/* Widgets Rápidos */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="glass p-6 rounded-3xl border-l-4 border-indigo-500">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Net Gamma Exposure ($)</p>
-                    <h2 className={`text-4xl font-black mono tracking-tighter ${results.total >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
-                      {results.total.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                    </h2>
-                  </div>
-                  <div className="glass p-6 rounded-3xl">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Regime de Volatilidade</p>
-                    <div className="flex items-center gap-3">
-                      <div className={`w-3 h-3 rounded-full animate-pulse ${results.total >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                      <h2 className="text-2xl font-black uppercase tracking-tight">
-                        {results.total >= 0 ? 'Gamma Positivo' : 'Gamma Negativo'}
-                      </h2>
-                    </div>
-                  </div>
-                </div>
+              <div className="bg-slate-900/40 border border-slate-800 p-6 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Call Resistance</p>
+                <h3 className="text-3xl font-black mono tracking-tighter text-emerald-500/80">
+                  {stats ? `$${(stats.callGex / 1000000).toFixed(2)}M` : '---'}
+                </h3>
+              </div>
+              <div className="bg-slate-900/40 border border-slate-800 p-6 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Put Support</p>
+                <h3 className="text-3xl font-black mono tracking-tighter text-rose-500/80">
+                  {stats ? `$${(Math.abs(stats.putGex) / 1000000).toFixed(2)}M` : '---'}
+                </h3>
+              </div>
+            </div>
 
-                {/* Gráfico Principal */}
-                <div className="glass p-8 rounded-[40px]">
-                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6">Distribuição de Gamma por Strike Price</h4>
-                  <div ref={chartRef} className="w-full h-[400px]"></div>
-                </div>
+            {/* Gráfico de Barras */}
+            <div className="bg-slate-900/40 border border-slate-800 p-8 rounded-[32px] min-h-[500px] flex flex-col">
+              <div className="flex justify-between items-center mb-6">
+                <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></span>
+                  GEX Profile by Strike
+                </h4>
+                {stats && (
+                  <div className="text-[10px] mono bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-full border border-indigo-500/20">
+                    STATUS: {stats.netGex >= 0 ? 'LOW VOLATILITY REGIME' : 'HIGH VOLATILITY RISK'}
+                  </div>
+                )}
               </div>
-            )}
+              
+              <div className="flex-1 min-h-[400px]" ref={chartRef}>
+                {!stats && (
+                  <div className="h-full flex items-center justify-center text-slate-800">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.3em]">Aguardando Injeção de Dados</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer Técnico */}
+            <footer className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[9px] mono text-slate-600 uppercase">
+              <div className="bg-slate-900/20 p-4 rounded-xl border border-slate-800/30">
+                Data Precision: determinístico (100% Client-Side)<br/>
+                Engine: v2.5.2 Stable React 19
+              </div>
+              <div className="bg-slate-900/20 p-4 rounded-xl border border-slate-800/30 text-right">
+                Gamma Flip Zone: {stats && stats.netGex !== 0 ? 'Calculated dynamic' : 'N/A'}<br/>
+                Last Tick: {new Date().toLocaleTimeString()}
+              </div>
+            </footer>
           </main>
+
         </div>
       </div>
     </div>
   );
 };
 
-// Inicialização Robusta
-const rootNode = document.getElementById('root');
-if (rootNode) {
-  createRoot(rootNode).render(<GEXAnalyzer />);
+// Ponto de Entrada Seguro
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  createRoot(rootElement).render(<GEXAnalyzer />);
 }

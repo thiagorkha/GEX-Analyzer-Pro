@@ -1,5 +1,5 @@
 {
-  "name": "GEX Analyzer Pro 2.0",
-  "description": "Terminal quantitativo determinístico para análise de Gamma Exposure em tempo real (100% Client-Side).",
+  "name": "Gamma Terminal Pro 2.5",
+  "description": "Terminal quantitativo para análise de GEX com motor de renderização Vite.",
   "requestFramePermissions": []
 }
