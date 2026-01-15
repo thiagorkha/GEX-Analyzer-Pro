@@ -41,10 +41,13 @@ const GEXAnalyzer: React.FC = () => {
     reader.onload = (evt) => {
       try {
         const bstr = evt.target?.result;
-        const wb = (window as any).XLSX.read(bstr, { type: 'binary' });
+        const XLSX = (window as any).XLSX;
+        if (!XLSX) throw new Error("Biblioteca de Excel não carregada.");
+
+        const wb = XLSX.read(bstr, { type: 'binary' });
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
-        const data = (window as any).XLSX.utils.sheet_to_json(ws);
+        const data = XLSX.utils.sheet_to_json(ws);
         
         const mappedData = data.map((row: any) => ({
           ticker: row.ticker || row.symbol || row.ativo || 'ASSET',
@@ -54,7 +57,7 @@ const GEXAnalyzer: React.FC = () => {
           oi: parseFloat(row.oi || row.open_interest || 0),
         })).filter((o: any) => o.strike > 0 && o.oi > 0);
 
-        if (mappedData.length === 0) throw new Error("Formato de planilha inválido ou sem dados.");
+        if (mappedData.length === 0) throw new Error("Planilha sem dados válidos (ticker, tipo, strike, gamma, oi).");
         
         setOptions(mappedData);
         setError(null);
@@ -62,6 +65,7 @@ const GEXAnalyzer: React.FC = () => {
         setError("Erro ao ler arquivo: " + err.message);
       }
     };
+    reader.onerror = () => setError("Erro na leitura do arquivo.");
     reader.readAsBinaryString(file);
   };
 
@@ -91,23 +95,14 @@ const GEXAnalyzer: React.FC = () => {
     if (totalGex > 0) {
       signals.push({
         direction: 'LONG',
-        reason: 'Ambiente de Gamma Positivo favorece compressão de volatilidade e suporte.',
+        reason: 'Ambiente de Gamma Positivo favorece compressão de volatilidade.',
         confidence: 0.75
       });
     } else {
       signals.push({
         direction: 'SHORT',
-        reason: 'Gamma Negativo indica aceleração de movimentos direcionais (Short Squeeze/Flash Crash).',
+        reason: 'Gamma Negativo indica aceleração de movimentos direcionais.',
         confidence: 0.8
-      });
-    }
-
-    const nearestWall = gammaWalls[0];
-    if (nearestWall && Math.abs(nearestWall.strike - spot) / spot < 0.01) {
-      signals.push({
-        direction: 'NEUTRAL',
-        reason: `Preço em zona de colisão com Wall de ${nearestWall.type} em $${nearestWall.strike}.`,
-        confidence: 0.9
       });
     }
 
@@ -116,7 +111,7 @@ const GEXAnalyzer: React.FC = () => {
       regime,
       pinRisk,
       gammaWalls,
-      marketContext: `Análise de ${processedOptions.length} strikes concluída. GEX líquido: ${totalGex.toLocaleString()}.`,
+      marketContext: `Análise concluída. GEX líquido: ${totalGex.toLocaleString()}.`,
       signals
     };
   };
@@ -171,8 +166,8 @@ const GEXAnalyzer: React.FC = () => {
       const layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
-        xaxis: { gridcolor: '#1e293b', tickfont: { color: '#94a3b8' }, title: 'Strike Price' },
-        yaxis: { gridcolor: '#1e293b', tickfont: { color: '#94a3b8' }, title: 'Gamma Exposure' },
+        xaxis: { gridcolor: '#1e293b', tickfont: { color: '#94a3b8' }, title: 'Strike' },
+        yaxis: { gridcolor: '#1e293b', tickfont: { color: '#94a3b8' }, title: 'GEX' },
         legend: { font: { color: '#f8fafc' } },
         margin: { t: 20, b: 40, l: 60, r: 20 },
         height: 350
@@ -180,7 +175,7 @@ const GEXAnalyzer: React.FC = () => {
 
       (window as any).Plotly.newPlot(chartRef.current, [trace1, trace2], layout, { responsive: true, displayModeBar: false });
     }
-  }, [results]);
+  }, [results, options]);
 
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200">
@@ -347,4 +342,8 @@ const GEXAnalyzer: React.FC = () => {
   );
 };
 
-createRoot(document.getElementById('root')!).render(<GEXAnalyzer />);
+const container = document.getElementById('root');
+if (container) {
+  const root = createRoot(container);
+  root.render(<GEXAnalyzer />);
+}
